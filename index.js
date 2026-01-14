@@ -7,6 +7,12 @@ const session = require('express-session');
 const passport = require('passport');
 const FacebookStrategy = require('passport-facebook').Strategy;
 
+// --- TESTE DE VARIAVEIS (ADICIONE ISSO PARA TESTAR) ---
+console.log("---------------------------------------------------");
+console.log("APP ID:", process.env.FACEBOOK_APP_ID ? "✅ CARREGADO" : "❌ NÃO ENCONTRADO (Vazio)");
+console.log("SECRET:", process.env.FACEBOOK_APP_SECRET ? "✅ CARREGADO" : "❌ NÃO ENCONTRADO (Vazio)");
+console.log("---------------------------------------------------");
+
 // --- CONFIGURAÇÕES FIXAS ---
 const PORT = process.env.PORT || 3000;
 const VERIFY_TOKEN = 'fluxpro_token_seguro';
