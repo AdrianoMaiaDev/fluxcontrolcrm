@@ -17,7 +17,7 @@ const FACEBOOK_APP_SECRET = '108d6d12657987a35b4ab9a63001359e';
 const CALLBACK_URL = 'https://fluxcontrolcrm.onrender.com/auth/facebook/callback';
 
 // 👇 VARIÁVEL DINÂMICA (COMEÇA COM O SEU FIXO, MAS MUDA NO LOGIN)
-let PAGE_ACCESS_TOKEN = 'COLE_SEU_TOKEN_FIXO_AQUI_COMO_BACKUP'; 
+let PAGE_ACCESS_TOKEN = 'EAAYnzQ7XO3sBQfw0ZBf3kdsYfM3opwqwxilVMIQ8UySqiw4fhsZCSC77udSSRmSLyDAenaUR5P8pRvUJxOQxHtlqmbNBbWgovJP4Tn34x0kvgI0YuiyGSXBZCnXsoe3RlKZADc9XRfRbkXs636ptPElJplU2QF7x1zuogZC73K8wrVI9IiZCPxsjO8bl2SfyGUGkwykDcXNpQIknvaoxswswEmZBnnDd3epWWZA63IRBxaAl0UTvnfqpfQZDZD'; 
 
 const app = express();
 const server = http.createServer(app);
