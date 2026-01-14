@@ -20,10 +20,11 @@ const CALLBACK_URL = 'https://fluxcontrolcrm.onrender.com/auth/facebook/callback
 const app = express();
 const server = http.createServer(app);
 
-// Configuração do CORS (Para aceitar conexões do seu site)
+// Configuração do CORS (CORRIGIDA)
 app.use(cors({
-    origin: "*", 
-    methods: ["GET", "POST"],
+    origin: true, // <--- O SEGREDO ESTÁ AQUI (Sem aspas, apenas true)
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true
 }));
 
