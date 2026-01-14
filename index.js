@@ -11,6 +11,7 @@ const admin = require('firebase-admin'); // Adicionado Firebase
 
 // --- 1. INICIALIZAR O APP (O "CARRO" TEM QUE VIR PRIMEIRO) ---
 const app = express();
+app.set('trust proxy', 1); // <--- ADICIONE ISSO (Obrigatório para Render/Heroku)
 const server = http.createServer(app);
 const PORT = process.env.PORT || 3000;
 const VERIFY_TOKEN = 'fluxpro_token_seguro';
@@ -80,7 +81,7 @@ if (FACEBOOK_APP_ID && FACEBOOK_APP_SECRET) {
     ));
 }
 
-// Estratégia Google
+// Estratégia Google (CORRIGIDA PARA SALVAR TOKEN)
 if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
     passport.use(new GoogleStrategy({
         clientID: GOOGLE_CLIENT_ID,
@@ -88,7 +89,8 @@ if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
         callbackURL: "https://fluxcontrolcrm.onrender.com/auth/google/callback"
       },
       function(accessToken, refreshToken, profile, done) {
-        return done(null, profile);
+        // 👇 AQUI ESTAVA O ERRO: Precisamos passar o accessToken junto!
+        return done(null, { profile, accessToken, refreshToken });
       }
     ));
 }
