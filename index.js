@@ -7,6 +7,37 @@ const session = require('express-session');
 const passport = require('passport');
 const FacebookStrategy = require('passport-facebook').Strategy;
 
+const GoogleStrategy = require('passport-google-oauth20').Strategy;
+
+// Pegando as senhas do Cofre do Render
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+
+passport.use(new GoogleStrategy({
+    clientID: GOOGLE_CLIENT_ID,
+    clientSecret: GOOGLE_CLIENT_SECRET,
+    callbackURL: "https://fluxcontrolcrm.onrender.com/auth/google/callback"
+  },
+  function(accessToken, refreshToken, profile, done) {
+    // Aqui você pode salvar o usuário no banco de dados se quiser
+    return done(null, profile);
+  }
+));
+
+// Rota para iniciar o login (Frontend chama essa)
+app.get('/auth/google',
+  passport.authenticate('google', { scope: ['profile', 'email'] })
+);
+
+// Rota de retorno (Google devolve aqui)
+app.get('/auth/google/callback', 
+  passport.authenticate('google', { failureRedirect: '/login-falhou' }),
+  function(req, res) {
+    // Sucesso! Fecha a janela ou redireciona
+    res.send('<script>window.opener.postMessage("login_google_sucesso", "*"); window.close();</script>');
+  }
+);
+
 // --- TESTE DE VARIAVEIS (ADICIONE ISSO PARA TESTAR) ---
 console.log("---------------------------------------------------");
 console.log("APP ID:", process.env.FACEBOOK_APP_ID ? "✅ CARREGADO" : "❌ NÃO ENCONTRADO (Vazio)");
