@@ -176,16 +176,24 @@ app.post('/webhook', async (req, res) => {
     const body = req.body;
     if (body.object === 'page' || body.object === 'instagram') {
         for (const entry of body.entry) {
-            const evt = entry.messaging ? entry.messaging[0] : null;
-            if (evt) {
-                let txt = evt.message.text || (evt.message.attachments ? evt.message.attachments[0].payload.url : '');
-                let type = evt.message.attachments ? evt.message.attachments[0].type : 'text';
+            // Verifica se existe o array messaging
+            const webhook_event = entry.messaging ? entry.messaging[0] : null;
+            
+            // 👇 AQUI ESTAVA O ERRO: Precisamos garantir que existe 'message' antes de ler 'text'
+            if (webhook_event && webhook_event.message) {
+                let txt = webhook_event.message.text || (webhook_event.message.attachments ? webhook_event.message.attachments[0].payload.url : '');
+                let type = webhook_event.message.attachments ? webhook_event.message.attachments[0].type : 'text';
                 
                 if (txt) {
-                    const perfil = await getUserProfile(evt.sender.id);
+                    const perfil = await getUserProfile(webhook_event.sender.id);
                     io.emit('nova_mensagem', {
-                        id: evt.sender.id, name: perfil.first_name, avatar: perfil.profile_pic,
-                        text: txt, type: type, timestamp: new Date().toISOString(), ehMinha: false
+                        id: webhook_event.sender.id, 
+                        name: perfil.first_name, 
+                        avatar: perfil.profile_pic,
+                        text: txt, 
+                        type: type, 
+                        timestamp: new Date().toISOString(), 
+                        ehMinha: false
                     });
                 }
             }
