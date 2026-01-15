@@ -111,10 +111,49 @@ app.get('/auth/google', (req, res, next) => {
     passport.authenticate('google', { scope: ['profile', 'email', 'https://www.googleapis.com/auth/calendar'] })(req, res, next);
 });
 
+// --- CORREÇÃO DA ROTA DE CALLBACK (Substitua isso no index.js) ---
 app.get('/auth/google/callback', 
   passport.authenticate('google', { failureRedirect: '/login-falhou' }),
   function(req, res) {
-    res.send('<script>window.opener.postMessage("login_google_sucesso", "*"); window.close();</script>');
+    // 1. (Opcional) Aqui você poderia salvar o token no banco de dados se quisesse
+    // const token = req.user.accessToken;
+    // console.log("Google Token recebido:", token ? "Sim" : "Não");
+
+    // 2. Envia uma página HTML bonita em vez de só um script
+    res.send(`
+      <html>
+        <head>
+          <title>Autenticado!</title>
+          <style>
+            body { font-family: sans-serif; background: #111b21; color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; text-align: center; }
+            .btn { background: #00FF67; color: black; border: none; padding: 10px 20px; border-radius: 5px; font-weight: bold; cursor: pointer; margin-top: 20px; text-decoration: none; }
+          </style>
+        </head>
+        <body>
+          <h1>✅ Login Concluído!</h1>
+          <p>O FluxPro foi conectado ao Google com sucesso.</p>
+          <p id="status">Enviando sinal para a extensão...</p>
+          
+          <button class="btn" onclick="fechar()">Fechar Janela</button>
+
+          <script>
+            function fechar() {
+              // Tenta enviar a mensagem para a janela que abriu esta (o WhatsApp)
+              if (window.opener) {
+                window.opener.postMessage("login_google_sucesso", "*");
+                document.getElementById('status').innerText = "Sinal enviado! Fechando...";
+                setTimeout(() => window.close(), 1000);
+              } else {
+                document.getElementById('status').innerText = "Não foi possível fechar automaticamente. Clique no botão acima.";
+              }
+            }
+            
+            // Tenta rodar automaticamente ao carregar
+            window.onload = fechar;
+          </script>
+        </body>
+      </html>
+    `);
   }
 );
 
