@@ -139,30 +139,78 @@ app.get('/auth/google/callback',
   }
 );
 
-// Facebook
+// --- ROTAS FACEBOOK BLINDADAS ---
+
+// 1. Iniciar Login
 app.get('/auth/facebook', (req, res, next) => {
-    if (req.query.socketId) req.session.socketId = req.query.socketId;
-    passport.authenticate('facebook', { scope: ['public_profile', 'pages_show_list', 'pages_messaging', 'instagram_basic', 'instagram_manage_messages'] })(req, res, next);
+    passport.authenticate('facebook', { 
+        scope: ['public_profile', 'pages_show_list', 'pages_messaging', 'instagram_basic', 'instagram_manage_messages'] 
+    })(req, res, next);
 });
 
+// 2. Callback (A volta do Facebook)
 app.get('/auth/facebook/callback', 
   passport.authenticate('facebook', { failureRedirect: '/login-falhou' }),
   async (req, res) => {
-    const socketId = req.session.socketId;
-    if (socketId) {
-        try {
-            const pagesUrl = `https://graph.facebook.com/me/accounts?access_token=${req.user.accessToken}`;
-            const response = await fetch(pagesUrl);
-            const data = await response.json();
-            if (data.data && data.data.length > 0) {
-                PAGE_ACCESS_TOKEN = data.data[0].access_token; 
-                io.to(socketId).emit('login_sucesso', { nomePagina: data.data[0].name });
-            }
-        } catch (error) { console.error("Erro token:", error); }
-    }
-    res.send('<script>window.close()</script>');
+    try {
+        // Pega as páginas do usuário
+        const pagesUrl = `https://graph.facebook.com/me/accounts?access_token=${req.user.accessToken}`;
+        const response = await fetch(pagesUrl);
+        const data = await response.json();
+
+        if (data.data && data.data.length > 0) {
+            const pagina = data.data[0]; // Pega a primeira página
+            
+            // 🔥 SALVA NO FIREBASE (PERSISTÊNCIA)
+            // Assim, se o servidor reiniciar, não perdemos a conexão
+            const db = admin.firestore();
+            await db.collection('config').doc('facebook').set({
+                pageAccessToken: pagina.access_token,
+                pageName: pagina.name,
+                pageId: pagina.id,
+                updatedAt: new Date().toISOString()
+            });
+
+            // Atualiza a variável global para uso imediato
+            PAGE_ACCESS_TOKEN = pagina.access_token;
+            console.log("✅ Facebook Conectado e Salvo no Banco:", pagina.name);
+        }
+    } catch (error) { console.error("Erro ao salvar token FB:", error); }
+
+    // Envia a tela bonita de sucesso
+    res.send(`
+      <html>
+        <head><title>Conectado!</title><style>body{font-family:sans-serif;background:#111b21;color:white;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh}.btn{background:#1877F2;color:white;border:none;padding:10px 20px;border-radius:5px;font-weight:bold;cursor:pointer;margin-top:20px}</style></head>
+        <body>
+          <h1>✅ Facebook/Instagram Conectado!</h1>
+          <p>As configurações foram salvas no servidor.</p>
+          <button class="btn" onclick="window.close()">Voltar para o FluxPro</button>
+        </body>
+      </html>
+    `);
   }
 );
+
+// 3. Rota de Status (Para o Frontend perguntar "Já conectou?")
+app.get('/api/facebook/status', async (req, res) => {
+    // Se a variável global estiver vazia, tenta recuperar do Firebase (Recuperação de Desastre)
+    if (!PAGE_ACCESS_TOKEN) {
+        try {
+            const doc = await admin.firestore().collection('config').doc('facebook').get();
+            if (doc.exists) {
+                PAGE_ACCESS_TOKEN = doc.data().pageAccessToken;
+                console.log("♻️ Token Facebook recuperado do banco!");
+                return res.json({ connected: true, pageName: doc.data().pageName });
+            }
+        } catch(e) { console.error("Erro ao ler config:", e); }
+    }
+
+    if (PAGE_ACCESS_TOKEN) {
+        res.json({ connected: true, pageName: 'Página Ativa' });
+    } else {
+        res.json({ connected: false });
+    }
+});
 
 // --- 9. WEBHOOK (INSTAGRAM/FACEBOOK) ---
 app.get('/webhook', (req, res) => {
