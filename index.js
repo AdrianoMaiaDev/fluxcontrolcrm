@@ -148,32 +148,38 @@ app.post('/webhook', async (req, res) => {
     } else { res.sendStatus(404); }
 });
 
-// --- API ENVIAR (BLINDADA CONTRA REINICIALIZAÇÃO) ---
+// --- API ENVIAR (COM DIAGNÓSTICO DETALHADO) ---
 app.post('/api/enviar-instagram', async (req, res) => {
     const { recipientId, texto } = req.body;
     
-    // 1. Tenta pegar da memória RAM
+    console.log(`📤 Tentando enviar para ${recipientId}: "${texto}"`);
+
+    // 1. Tenta pegar da memória
     let token = GLOBAL_PAGE_TOKEN;
 
-    // 2. Se a memória estiver vazia (Servidor reiniciou), busca no Banco de Dados
+    // 2. Se não tiver na memória, tenta no Banco
     if (!token) {
+        console.log("⚠️ Memória vazia. Buscando no Firebase (config/facebook_global)...");
         try {
-            console.log("⚠️ Memória vazia, buscando token no Firebase...");
             const doc = await admin.firestore().collection('config').doc('facebook_global').get();
             if (doc.exists) {
                 token = doc.data().token;
-                GLOBAL_PAGE_TOKEN = token; // Reabastece a memória
-                console.log("✅ Token recuperado do banco com sucesso!");
+                GLOBAL_PAGE_TOKEN = token; // Atualiza memória
+                console.log("✅ Token recuperado do banco!");
+            } else {
+                console.error("❌ ERRO CRÍTICO: Documento 'config/facebook_global' não existe no banco.");
             }
         } catch(e) {
-            console.error("Erro ao recuperar token:", e);
+            console.error("❌ ERRO FIREBASE:", e.message);
         }
     }
 
     if (!token) {
-        return res.status(500).json({ error: "Servidor desconectado. Faça login novamente no Instagram." });
+        console.error("❌ FALHA: Nenhum token encontrado no servidor.");
+        return res.status(500).json({ error: "Servidor sem token. Por favor, reconecte o Instagram." });
     }
 
+    // 3. Tenta enviar para o Facebook
     try {
         const url = `https://graph.facebook.com/v21.0/me/messages?access_token=${token}`;
         const response = await fetch(url, { 
@@ -184,13 +190,15 @@ app.post('/api/enviar-instagram', async (req, res) => {
         const data = await response.json();
         
         if (data.error) {
-            console.error("❌ Erro Facebook:", data.error);
-            return res.status(500).json({ error: data.error.message });
+            console.error("❌ ERRO FACEBOOK:", JSON.stringify(data.error, null, 2));
+            return res.status(500).json({ error: `Erro Facebook: ${data.error.message}` });
         }
         
+        console.log("✅ Enviado com sucesso! ID:", data.message_id);
         res.json({ success: true, id: data.message_id });
 
     } catch (error) { 
+        console.error("❌ ERRO FETCH:", error.message);
         res.status(500).json({ error: error.message }); 
     }
 });
