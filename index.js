@@ -273,6 +273,78 @@ app.post('/api/enviar-instagram', async (req, res) => {
     }
 });
 
+// --- ROTAS DA API GOOGLE CALENDAR (ADICIONE ISSO NO FINAL, ANTES DO LISTEN) ---
+
+// Middleware simples para checar se tem token
+const checkGoogleAuth = (req, res, next) => {
+    if (req.user && req.user.accessToken) return next();
+    res.status(401).json({ error: 'Usuário não conectado ao Google.' });
+};
+
+// 1. Listar Eventos (Busca do Backend para o Google)
+app.get('/api/google/events', checkGoogleAuth, async (req, res) => {
+    const accessToken = req.user.accessToken;
+    const { timeMin, timeMax } = req.query; // Recebe as datas do frontend
+
+    try {
+        const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime`;
+        const response = await fetch(url, {
+            headers: { Authorization: `Bearer ${accessToken}` }
+        });
+        const data = await response.json();
+        
+        if (data.error) {
+            console.error('Erro Google Calendar:', data.error);
+            // Se o token expirou, avisa o frontend para deslogar
+            if (data.error.code === 401) return res.status(401).json({ error: 'Token expirado' });
+            return res.status(500).json(data.error);
+        }
+        res.json(data.items || []);
+    } catch (error) {
+        console.error('Erro Servidor Calendar:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// 2. Criar Evento
+app.post('/api/google/create-event', checkGoogleAuth, async (req, res) => {
+    const accessToken = req.user.accessToken;
+    const eventBody = req.body;
+
+    try {
+        const response = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1&sendUpdates=all`, {
+            method: 'POST',
+            headers: { 
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(eventBody)
+        });
+        const data = await response.json();
+        
+        if (data.error) return res.status(500).json(data.error);
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// 3. Deletar Evento
+app.delete('/api/google/delete-event/:id', checkGoogleAuth, async (req, res) => {
+    const accessToken = req.user.accessToken;
+    const { id } = req.params;
+
+    try {
+        await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${id}`, {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${accessToken}` }
+        });
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // --- 8. INICIAR SERVIDOR ---
 server.listen(PORT, () => {
     console.log(`✅ Servidor rodando na porta ${PORT}`);
