@@ -105,13 +105,14 @@ app.get('/', (req, res) => { res.send('FluxPro Backend Online! 🚀'); });
 
 // --- 8. ROTAS DE AUTENTICAÇÃO ---
 
-// Google
+// Rota de Login Google (AJUSTADA PARA TOKEN ETERNO)
 app.get('/auth/google', (req, res, next) => {
     passport.authenticate('google', { 
-        scope: ['profile', 'email', 'https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/calendar.events'] 
+        scope: ['profile', 'email', 'https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/calendar.events'],
+        accessType: 'offline', // <--- IMPORTANTE: Pede token eterno
+        prompt: 'consent'      // <--- IMPORTANTE: Força gerar o refresh token
     })(req, res, next);
 });
-
 app.get('/auth/google/callback', 
   passport.authenticate('google', { failureRedirect: '/login-falhou' }),
   function(req, res) {
@@ -221,6 +222,15 @@ const checkGoogleAuth = (req, res, next) => {
     if (req.user && req.user.accessToken) return next();
     res.status(401).json({ error: 'Não conectado ao Google' });
 };
+
+// Rota para o Frontend perguntar: "Já estou logado?"
+app.get('/api/google/status', (req, res) => {
+    if (req.user && req.user.accessToken) {
+        res.json({ connected: true });
+    } else {
+        res.json({ connected: false });
+    }
+});
 
 app.get('/api/google/events', checkGoogleAuth, async (req, res) => {
     const { timeMin, timeMax } = req.query;
