@@ -115,48 +115,55 @@ app.get('/auth/google', (req, res, next) => {
 app.get('/auth/google/callback', 
   passport.authenticate('google', { failureRedirect: '/login-falhou' }),
   function(req, res) {
-    // 1. (Opcional) Aqui você poderia salvar o token no banco de dados se quisesse
-    // const token = req.user.accessToken;
-    // console.log("Google Token recebido:", token ? "Sim" : "Não");
-
-    // 2. Envia uma página HTML bonita em vez de só um script
+    // Envia uma página HTML que força o aviso para a extensão
     res.send(`
       <html>
         <head>
-          <title>Autenticado!</title>
+          <title>Conectado!</title>
           <style>
-            body { font-family: sans-serif; background: #111b21; color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; text-align: center; }
-            .btn { background: #00FF67; color: black; border: none; padding: 10px 20px; border-radius: 5px; font-weight: bold; cursor: pointer; margin-top: 20px; text-decoration: none; }
+            body { font-family: 'Segoe UI', sans-serif; background: #111b21; color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; text-align: center; }
+            .success-icon { font-size: 60px; margin-bottom: 20px; }
+            h1 { color: #00FF67; margin: 0; }
+            p { color: #aebac1; margin-top: 10px; }
+            .btn { background: #00FF67; color: black; border: none; padding: 12px 25px; border-radius: 25px; font-weight: bold; cursor: pointer; margin-top: 30px; text-decoration: none; font-size: 16px; }
+            .btn:hover { background: #00e65c; }
           </style>
         </head>
         <body>
-          <h1>✅ Login Concluído!</h1>
-          <p>O FluxPro foi conectado ao Google com sucesso.</p>
-          <p id="status">Enviando sinal para a extensão...</p>
+          <div class="success-icon">✅</div>
+          <h1>Google Agenda Conectada!</h1>
+          <p>O FluxPro recebeu sua autorização.</p>
+          <p id="status" style="font-size: 12px; opacity: 0.7;">Finalizando configuração...</p>
           
-          <button class="btn" onclick="fechar()">Fechar Janela</button>
+          <button class="btn" onclick="notificarEFechar()">VOLTAR PARA O WHATSAPP</button>
 
           <script>
-            function fechar() {
-              // Tenta enviar a mensagem para a janela que abriu esta (o WhatsApp)
-              if (window.opener) {
-                window.opener.postMessage("login_google_sucesso", "*");
-                document.getElementById('status').innerText = "Sinal enviado! Fechando...";
-                setTimeout(() => window.close(), 1000);
-              } else {
-                document.getElementById('status').innerText = "Não foi possível fechar automaticamente. Clique no botão acima.";
-              }
+            function notificarEFechar() {
+              // 1. Tenta avisar a janela pai (Extensão)
+              try {
+                if (window.opener) {
+                  window.opener.postMessage("login_google_sucesso", "*");
+                  console.log("Sinal enviado para a extensão.");
+                } else {
+                  console.log("Janela pai não encontrada.");
+                }
+              } catch (e) { console.error(e); }
+
+              // 2. Fecha esta janela após um breve delay
+              document.getElementById('status').innerText = "Pode fechar esta janela agora.";
+              setTimeout(() => window.close(), 500);
             }
             
-            // Tenta rodar automaticamente ao carregar
-            window.onload = fechar;
+            // Tenta rodar automaticamente assim que carrega
+            window.onload = function() {
+                setTimeout(notificarEFechar, 1000);
+            };
           </script>
         </body>
       </html>
     `);
   }
 );
-
 // Login Facebook
 app.get('/auth/facebook', (req, res, next) => {
     if (!FACEBOOK_APP_ID) return res.send('Erro: Facebook App ID não configurado no Render.');
