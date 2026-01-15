@@ -65,12 +65,13 @@ if (process.env.FACEBOOK_APP_ID) {
     }, (req, token, r, profile, done) => done(null, { profile, accessToken: token })));
 }
 
-// Estratégia Google (REINSERIDA AQUI)
+// Estratégia Google (AQUI ESTAVA FALTANDO ANTES)
 if (process.env.GOOGLE_CLIENT_ID) {
     passport.use(new GoogleStrategy({
         clientID: process.env.GOOGLE_CLIENT_ID,
         clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-        callbackURL: "https://fluxcontrolcrm.onrender.com/auth/google/callback"
+        callbackURL: "https://fluxcontrolcrm.onrender.com/auth/google/callback",
+        scope: ['profile', 'email', 'https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/calendar.events']
       },
       function(accessToken, refreshToken, profile, done) {
         // Salva tokens na sessão
@@ -174,7 +175,6 @@ app.post('/api/enviar-instagram', async (req, res) => {
             let doc = await db.collection('config').doc('facebook_global').get();
             if (doc.exists) token = doc.data().token;
             
-            // Backup extra: pega de integrated_pages se não achar no global
             if (!token) {
                 const snapshot = await db.collection('integrated_pages').limit(1).get();
                 if (!snapshot.empty) token = snapshot.docs[0].data().pageAccessToken;
@@ -204,7 +204,7 @@ app.post('/api/enviar-instagram', async (req, res) => {
 });
 
 // =================================================================
-// --- 8. ROTAS GOOGLE CALENDAR (REINSERIDAS AQUI) ---
+// --- 8. ROTAS GOOGLE CALENDAR (AGORA ESTÃO AQUI!) ---
 // =================================================================
 
 // Login Google
