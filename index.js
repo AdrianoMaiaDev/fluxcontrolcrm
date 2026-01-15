@@ -19,10 +19,10 @@ const VERIFY_TOKEN = 'fluxpro_token_seguro';
 app.set('trust proxy', 1); // Obrigatório para Render/Heroku
 
 app.use(cors({
-    origin: true, // Aceita qualquer origem (necessário para extensão)
+    origin: true,
     methods: ["GET", "POST", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
-    credentials: true // Permite cookies de sessão
+    credentials: true
 }));
 
 app.use(bodyParser.json());
@@ -32,8 +32,8 @@ app.use(session({
     resave: false,
     saveUninitialized: false,
     cookie: {
-        secure: true, // True porque o Render usa HTTPS
-        sameSite: 'none', // Importante para o Chrome aceitar o cookie na extensão
+        secure: true,
+        sameSite: 'none',
         maxAge: 24 * 60 * 60 * 1000 // 24 horas
     }
 }));
@@ -45,7 +45,6 @@ app.use(passport.session());
 if (process.env.FIREBASE_CREDENTIALS) {
     try {
         const serviceAccount = JSON.parse(process.env.FIREBASE_CREDENTIALS);
-        // Verifica se já existe app inicializado para evitar erro de duplicidade
         if (!admin.apps.length) {
             admin.initializeApp({
                 credential: admin.credential.cert(serviceAccount)
@@ -59,7 +58,7 @@ if (process.env.FIREBASE_CREDENTIALS) {
     console.log("⚠️ Pulei o Firebase (Faltam credenciais no Render)");
 }
 
-// --- 4. SERIALIZAÇÃO DE USUÁRIO ---
+// --- 4. SERIALIZAÇÃO ---
 passport.serializeUser((user, done) => done(null, user));
 passport.deserializeUser((obj, done) => done(null, obj));
 
@@ -68,7 +67,9 @@ const FACEBOOK_APP_ID = process.env.FACEBOOK_APP_ID;
 const FACEBOOK_APP_SECRET = process.env.FACEBOOK_APP_SECRET; 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-let PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN; 
+
+// Variável global APENAS para fallback (ideal é usar o banco)
+let GLOBAL_PAGE_TOKEN = process.env.PAGE_ACCESS_TOKEN; 
 
 if (FACEBOOK_APP_ID && FACEBOOK_APP_SECRET) {
     passport.use(new FacebookStrategy({
@@ -91,137 +92,116 @@ if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
         callbackURL: "https://fluxcontrolcrm.onrender.com/auth/google/callback"
       },
       function(accessToken, refreshToken, profile, done) {
-        // Salva tokens na sessão
         return done(null, { profile, accessToken, refreshToken });
       }
     ));
 }
 
-// --- 6. SOCKET.IO ---
+// --- 6. SOCKET.IO COM SALAS PRIVADAS ---
 const io = new Server(server, { cors: { origin: "*" } });
 
+io.on('connection', (socket) => {
+    // O Frontend envia o UID do Firebase para entrar na sala pessoal
+    socket.on('entrar_sala_privada', (uid) => {
+        if(uid) {
+            socket.join(uid);
+            console.log(`🔒 Socket ${socket.id} entrou na sala do usuário: ${uid}`);
+        }
+    });
+});
+
 // --- 7. ROTAS GERAIS ---
-app.get('/', (req, res) => { res.send('FluxPro Backend Online! 🚀'); });
+app.get('/', (req, res) => { res.send('FluxPro Backend Online (Multi-User) 🚀'); });
 
-// --- 8. ROTAS DE AUTENTICAÇÃO ---
-
-// Rota de Login Google (AJUSTADA PARA TOKEN ETERNO)
+// --- 8. ROTAS GOOGLE (COM REFRESH TOKEN) ---
 app.get('/auth/google', (req, res, next) => {
     passport.authenticate('google', { 
         scope: ['profile', 'email', 'https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/calendar.events'],
-        accessType: 'offline', // <--- IMPORTANTE: Pede token eterno
-        prompt: 'consent'      // <--- IMPORTANTE: Força gerar o refresh token
+        accessType: 'offline', // Pede Refresh Token
+        prompt: 'consent'
     })(req, res, next);
 });
+
 app.get('/auth/google/callback', 
   passport.authenticate('google', { failureRedirect: '/login-falhou' }),
   function(req, res) {
-    res.send(`
-      <html>
-        <head>
-          <title>Conectado!</title>
-          <style>
-            body { font-family: sans-serif; background: #111b21; color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; text-align: center; }
-            .btn { background: #00FF67; color: black; border: none; padding: 12px 25px; border-radius: 25px; font-weight: bold; cursor: pointer; margin-top: 30px; text-decoration: none; font-size: 16px; }
-          </style>
-        </head>
-        <body>
-          <h1>✅ Google Conectado!</h1>
-          <p>Você pode fechar esta janela e voltar ao WhatsApp.</p>
-          <p style="font-size:12px; color:#888;">(Se o botão verde não apareceu na extensão, clique abaixo)</p>
-          <button class="btn" onclick="window.close()">Fechar Janela</button>
-          <script>
-            if(window.opener) { window.opener.postMessage("login_google_sucesso", "*"); }
-          </script>
-        </body>
-      </html>
-    `);
+    res.send(`<html><body><script>if(window.opener){window.opener.postMessage("login_google_sucesso","*");}window.close();</script></body></html>`);
   }
 );
 
-// --- ROTAS FACEBOOK BLINDADAS ---
+// --- 9. ROTAS FACEBOOK (COM SUPORTE A MULTI-USUÁRIO) ---
 
-// 1. Iniciar Login
+// Iniciar Login: Captura SocketID e UID do dono
 app.get('/auth/facebook', (req, res, next) => {
+    if (req.query.socketId) req.session.socketId = req.query.socketId;
+    if (req.query.uid) req.session.uid = req.query.uid; 
+    
     passport.authenticate('facebook', { 
         scope: ['public_profile', 'pages_show_list', 'pages_messaging', 'instagram_basic', 'instagram_manage_messages'] 
     })(req, res, next);
 });
 
-// 2. Callback (A volta do Facebook)
+// Callback: Salva o Mapeamento no Banco
 app.get('/auth/facebook/callback', 
   passport.authenticate('facebook', { failureRedirect: '/login-falhou' }),
   async (req, res) => {
-    try {
-        // Pega as páginas do usuário
-        const pagesUrl = `https://graph.facebook.com/me/accounts?access_token=${req.user.accessToken}`;
-        const response = await fetch(pagesUrl);
-        const data = await response.json();
+    const socketId = req.session.socketId;
+    const userUid = req.session.uid; 
 
-        if (data.data && data.data.length > 0) {
-            const pagina = data.data[0]; // Pega a primeira página
-            
-            // 🔥 SALVA NO FIREBASE (PERSISTÊNCIA)
-            // Assim, se o servidor reiniciar, não perdemos a conexão
-            const db = admin.firestore();
-            await db.collection('config').doc('facebook').set({
-                pageAccessToken: pagina.access_token,
-                pageName: pagina.name,
-                pageId: pagina.id,
-                updatedAt: new Date().toISOString()
-            });
+    if (socketId && userUid) {
+        try {
+            const pagesUrl = `https://graph.facebook.com/me/accounts?access_token=${req.user.accessToken}`;
+            const response = await fetch(pagesUrl);
+            const data = await response.json();
 
-            // Atualiza a variável global para uso imediato
-            PAGE_ACCESS_TOKEN = pagina.access_token;
-            console.log("✅ Facebook Conectado e Salvo no Banco:", pagina.name);
-        }
-    } catch (error) { console.error("Erro ao salvar token FB:", error); }
+            if (data.data && data.data.length > 0) {
+                const pagina = data.data[0];
+                const db = admin.firestore();
+                
+                // 1. Salva na conta do usuário (para referência visual)
+                await db.collection('users').doc(userUid).collection('config').doc('facebook').set({
+                    pageName: pagina.name,
+                    pageId: pagina.id,
+                    accessToken: pagina.access_token,
+                    connectedAt: new Date().toISOString()
+                });
 
-    // Envia a tela bonita de sucesso
-    res.send(`
-      <html>
-        <head><title>Conectado!</title><style>body{font-family:sans-serif;background:#111b21;color:white;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh}.btn{background:#1877F2;color:white;border:none;padding:10px 20px;border-radius:5px;font-weight:bold;cursor:pointer;margin-top:20px}</style></head>
-        <body>
-          <h1>✅ Facebook/Instagram Conectado!</h1>
-          <p>As configurações foram salvas no servidor.</p>
-          <button class="btn" onclick="window.close()">Voltar para o FluxPro</button>
-        </body>
-      </html>
-    `);
+                // 2. Salva no MAPA GLOBAL (Crucial para o Webhook saber rotear)
+                // ID da Página -> Dono da Página
+                await db.collection('integrated_pages').doc(pagina.id).set({
+                    ownerUid: userUid,
+                    pageAccessToken: pagina.access_token,
+                    pageName: pagina.name
+                });
+
+                GLOBAL_PAGE_TOKEN = pagina.access_token; // Fallback temporário
+                io.to(socketId).emit('login_sucesso', { nomePagina: pagina.name });
+            }
+        } catch (error) { console.error("Erro FB Token:", error); }
+    }
+    res.send('<script>window.close()</script>');
   }
 );
 
-// 3. Rota de Status (Para o Frontend perguntar "Já conectou?")
+// Status do Facebook
 app.get('/api/facebook/status', async (req, res) => {
-    // Se a variável global estiver vazia, tenta recuperar do Firebase (Recuperação de Desastre)
-    if (!PAGE_ACCESS_TOKEN) {
-        try {
-            const doc = await admin.firestore().collection('config').doc('facebook').get();
-            if (doc.exists) {
-                PAGE_ACCESS_TOKEN = doc.data().pageAccessToken;
-                console.log("♻️ Token Facebook recuperado do banco!");
-                return res.json({ connected: true, pageName: doc.data().pageName });
-            }
-        } catch(e) { console.error("Erro ao ler config:", e); }
-    }
-
-    if (PAGE_ACCESS_TOKEN) {
-        res.json({ connected: true, pageName: 'Página Ativa' });
-    } else {
-        res.json({ connected: false });
-    }
+    // Simplificado: Se tiver token global ou lógica futura de UID
+    res.json({ connected: !!GLOBAL_PAGE_TOKEN });
 });
 
-// --- 9. WEBHOOK (INSTAGRAM/FACEBOOK) ---
+// --- 10. WEBHOOK INTELIGENTE (ROTEAMENTO POR PÁGINA) ---
+
+// Validação do Token
 app.get('/webhook', (req, res) => {
     if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token'] === VERIFY_TOKEN) {
         res.status(200).send(req.query['hub.challenge']);
     } else { res.sendStatus(403); }
 });
 
-async function getUserProfile(psid) {
+// Função auxiliar: Busca Perfil usando o Token DA PÁGINA ESPECÍFICA
+async function getUserProfile(psid, pageToken) {
     try {
-        const url = `https://graph.facebook.com/v21.0/${psid}?fields=name,profile_pic&access_token=${PAGE_ACCESS_TOKEN}`;
+        const url = `https://graph.facebook.com/v21.0/${psid}?fields=name,profile_pic&access_token=${pageToken}`;
         const response = await fetch(url);
         const data = await response.json();
         if (data.error) return { first_name: "Cliente", profile_pic: "https://cdn-icons-png.flaticon.com/512/149/149071.png" };
@@ -229,21 +209,56 @@ async function getUserProfile(psid) {
     } catch (e) { return { first_name: "Cliente", profile_pic: "https://cdn-icons-png.flaticon.com/512/149/149071.png" }; }
 }
 
+// Função auxiliar: Busca quem é o dono da página
+async function getPageConfig(pageId) {
+    try {
+        const doc = await admin.firestore().collection('integrated_pages').doc(pageId).get();
+        if (doc.exists) return doc.data(); // Retorna { ownerUid, pageAccessToken }
+    } catch(e) { console.error("Erro Firebase Config:", e); }
+    return null;
+}
+
 app.post('/webhook', async (req, res) => {
     const body = req.body;
+
     if (body.object === 'page' || body.object === 'instagram') {
         for (const entry of body.entry) {
-            const webhook_event = entry.messaging ? entry.messaging[0] : null;
-            if (webhook_event && webhook_event.message) {
-                let txt = webhook_event.message.text || (webhook_event.message.attachments ? webhook_event.message.attachments[0].payload.url : '');
-                let type = webhook_event.message.attachments ? webhook_event.message.attachments[0].type : 'text';
+            
+            // 1. Descobrir para qual página foi a mensagem
+            const pageId = entry.id; 
+            const pageConfig = await getPageConfig(pageId);
+
+            // Se não tem dono cadastrado, ignora para não misturar
+            if (!pageConfig || !pageConfig.ownerUid) {
+                console.log(`⚠️ Mensagem ignorada: Página ${pageId} sem dono no sistema.`);
+                continue; 
+            }
+
+            const ownerUid = pageConfig.ownerUid;
+            const tokenDaPagina = pageConfig.pageAccessToken;
+
+            const evt = entry.messaging ? entry.messaging[0] : null;
+            
+            // 2. Verifica se é mensagem válida (evita crash com 'read receipts')
+            if (evt && evt.message) {
+                let txt = evt.message.text || (evt.message.attachments ? evt.message.attachments[0].payload.url : '');
+                let type = evt.message.attachments ? evt.message.attachments[0].type : 'text';
                 
                 if (txt) {
-                    const perfil = await getUserProfile(webhook_event.sender.id);
-                    io.emit('nova_mensagem', {
-                        id: webhook_event.sender.id, name: perfil.first_name, avatar: perfil.profile_pic,
-                        text: txt, type: type, timestamp: new Date().toISOString(), ehMinha: false
+                    // 3. Pega perfil do cliente
+                    const perfil = await getUserProfile(evt.sender.id, tokenDaPagina);
+                    
+                    // 4. Envia APENAS para a sala do Dono
+                    io.to(ownerUid).emit('nova_mensagem', {
+                        id: evt.sender.id, 
+                        name: perfil.first_name, 
+                        avatar: perfil.profile_pic,
+                        text: txt, 
+                        type: type, 
+                        timestamp: new Date().toISOString(), 
+                        ehMinha: false
                     });
+                    console.log(`✅ Mensagem roteada para usuário: ${ownerUid}`);
                 }
             }
         }
@@ -251,10 +266,13 @@ app.post('/webhook', async (req, res) => {
     } else { res.sendStatus(404); }
 });
 
+// API Enviar (Ainda usa token global por simplificação, mas pode ser evoluído)
 app.post('/api/enviar-instagram', async (req, res) => {
     const { recipientId, texto } = req.body;
+    // Idealmente, o frontend mandaria o pageId ou uid para buscarmos o token correto
+    // Por enquanto, usa o GLOBAL_PAGE_TOKEN como fallback
     try {
-        const url = `https://graph.facebook.com/v21.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`;
+        const url = `https://graph.facebook.com/v21.0/me/messages?access_token=${GLOBAL_PAGE_TOKEN}`;
         const response = await fetch(url, { 
             method: 'POST', headers: { 'Content-Type': 'application/json' }, 
             body: JSON.stringify({ recipient: { id: recipientId }, message: { text: texto } }) 
@@ -265,19 +283,14 @@ app.post('/api/enviar-instagram', async (req, res) => {
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// --- 10. API GOOGLE CALENDAR (Backend Proxy) ---
+// --- 11. API GOOGLE CALENDAR ---
 const checkGoogleAuth = (req, res, next) => {
     if (req.user && req.user.accessToken) return next();
-    res.status(401).json({ error: 'Não conectado ao Google' });
+    res.status(401).json({ error: 'Não conectado' });
 };
 
-// Rota para o Frontend perguntar: "Já estou logado?"
 app.get('/api/google/status', (req, res) => {
-    if (req.user && req.user.accessToken) {
-        res.json({ connected: true });
-    } else {
-        res.json({ connected: false });
-    }
+    res.json({ connected: !!(req.user && req.user.accessToken) });
 });
 
 app.get('/api/google/events', checkGoogleAuth, async (req, res) => {
@@ -313,5 +326,5 @@ app.delete('/api/google/delete-event/:id', checkGoogleAuth, async (req, res) => 
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// --- 11. START ---
-server.listen(PORT, () => console.log(`✅ Rodando na porta ${PORT}`));
+// --- 12. START ---
+server.listen(PORT, () => console.log(`✅ Server running on ${PORT}`));
