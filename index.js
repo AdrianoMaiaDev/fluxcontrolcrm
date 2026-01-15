@@ -148,22 +148,31 @@ app.post('/webhook', async (req, res) => {
     } else { res.sendStatus(404); }
 });
 
-// --- 6. API ENVIAR (MODO GLOBAL) ---
+// --- API ENVIAR (BLINDADA CONTRA REINICIALIZAÇÃO) ---
 app.post('/api/enviar-instagram', async (req, res) => {
     const { recipientId, texto } = req.body;
     
-    // 1. Tenta usar a variável global
+    // 1. Tenta pegar da memória RAM
     let token = GLOBAL_PAGE_TOKEN;
 
-    // 2. Se a variável estiver vazia (crashou), tenta ler do Firebase Backup
+    // 2. Se a memória estiver vazia (Servidor reiniciou), busca no Banco de Dados
     if (!token) {
         try {
+            console.log("⚠️ Memória vazia, buscando token no Firebase...");
             const doc = await admin.firestore().collection('config').doc('facebook_global').get();
-            if (doc.exists) token = doc.data().token;
-        } catch(e) {}
+            if (doc.exists) {
+                token = doc.data().token;
+                GLOBAL_PAGE_TOKEN = token; // Reabastece a memória
+                console.log("✅ Token recuperado do banco com sucesso!");
+            }
+        } catch(e) {
+            console.error("Erro ao recuperar token:", e);
+        }
     }
 
-    if (!token) return res.status(500).json({ error: "Servidor sem token conectado." });
+    if (!token) {
+        return res.status(500).json({ error: "Servidor desconectado. Faça login novamente no Instagram." });
+    }
 
     try {
         const url = `https://graph.facebook.com/v21.0/me/messages?access_token=${token}`;
@@ -171,10 +180,19 @@ app.post('/api/enviar-instagram', async (req, res) => {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, 
             body: JSON.stringify({ recipient: { id: recipientId }, message: { text: texto } }) 
         });
+        
         const data = await response.json();
-        if (data.error) return res.status(500).json({ error: data.error.message });
+        
+        if (data.error) {
+            console.error("❌ Erro Facebook:", data.error);
+            return res.status(500).json({ error: data.error.message });
+        }
+        
         res.json({ success: true, id: data.message_id });
-    } catch (error) { res.status(500).json({ error: error.message }); }
+
+    } catch (error) { 
+        res.status(500).json({ error: error.message }); 
+    }
 });
 
 // (MANTENHA AS ROTAS DO GOOGLE AQUI EMBAIXO IGUAL ESTAVA)
