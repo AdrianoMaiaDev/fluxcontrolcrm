@@ -266,23 +266,47 @@ app.post('/webhook', async (req, res) => {
     } else { res.sendStatus(404); }
 });
 
-// API Enviar (Ainda usa token global por simplificação, mas pode ser evoluído)
+// API Enviar Mensagem (Blindada contra reinicialização)
 app.post('/api/enviar-instagram', async (req, res) => {
     const { recipientId, texto } = req.body;
-    // Idealmente, o frontend mandaria o pageId ou uid para buscarmos o token correto
-    // Por enquanto, usa o GLOBAL_PAGE_TOKEN como fallback
+    
     try {
-        const url = `https://graph.facebook.com/v21.0/me/messages?access_token=${GLOBAL_PAGE_TOKEN}`;
+        let tokenParaEnvio = process.env.PAGE_ACCESS_TOKEN; // Tenta o global primeiro
+
+        // Se o global estiver vazio (servidor reiniciou), busca no banco de "Recuperação de Desastre"
+        if (!tokenParaEnvio) {
+            // OBS: Aqui estamos pegando um token "genérico" salvo. 
+            // Para multi-contas real no envio, o ideal seria o frontend mandar o UID ou PageID.
+            // Mas isso aqui já resolve o problema do servidor desligar.
+            const doc = await admin.firestore().collection('integrated_pages').listDocuments();
+            if (doc.length > 0) {
+                const snapshot = await doc[0].get(); // Pega a primeira página que achar
+                tokenParaEnvio = snapshot.data().pageAccessToken;
+            }
+        }
+
+        if (!tokenParaEnvio) {
+            return res.status(500).json({ error: "Nenhuma página conectada no servidor." });
+        }
+
+        const url = `https://graph.facebook.com/v21.0/me/messages?access_token=${tokenParaEnvio}`;
         const response = await fetch(url, { 
             method: 'POST', headers: { 'Content-Type': 'application/json' }, 
             body: JSON.stringify({ recipient: { id: recipientId }, message: { text: texto } }) 
         });
+        
         const data = await response.json();
-        if (data.error) return res.status(500).json({ error: data.error.message });
+        if (data.error) {
+            console.error('❌ Erro Facebook Envio:', data.error);
+            return res.status(500).json({ error: data.error.message });
+        }
         res.json({ success: true, id: data.message_id });
-    } catch (error) { res.status(500).json({ error: error.message }); }
-});
 
+    } catch (error) { 
+        console.error("Erro Servidor Envio:", error);
+        res.status(500).json({ error: error.message }); 
+    }
+});
 // --- 11. API GOOGLE CALENDAR ---
 const checkGoogleAuth = (req, res, next) => {
     if (req.user && req.user.accessToken) return next();
