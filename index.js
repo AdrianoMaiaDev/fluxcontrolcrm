@@ -9,7 +9,7 @@ const FacebookStrategy = require('passport-facebook').Strategy;
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const admin = require('firebase-admin');
 
-// --- 1. CONFIGURAÇÕES ---
+// --- 1. CONFIGURAÇÕES BÁSICAS ---
 const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 3000;
@@ -24,7 +24,9 @@ app.use(cors({
 }));
 app.use(bodyParser.json());
 app.use(session({
-    secret: 'fluxpro_segredo', resave: false, saveUninitialized: false,
+    secret: 'fluxpro_segredo',
+    resave: false,
+    saveUninitialized: false,
     cookie: { secure: true, sameSite: 'none', maxAge: 24 * 60 * 60 * 1000 }
 }));
 app.use(passport.initialize());
@@ -39,17 +41,11 @@ if (process.env.FIREBASE_CREDENTIALS) {
     } catch (e) { console.error("Erro Firebase:", e); }
 }
 
-// --- 3. SOCKET.IO (COM SALAS PRIVADAS) ---
+// --- 3. SOCKET.IO ---
 const io = new Server(server, { cors: { origin: "*" } });
-
 io.on('connection', (socket) => {
-    // O usuário entra na sala com o próprio ID do Firebase
-    socket.on('entrar_sala_privada', (uid) => {
-        if(uid) {
-            socket.join(uid);
-            console.log(`🔒 Socket ${socket.id} entrou na sala privada: ${uid}`);
-        }
-    });
+    // Entra na sala privada com o UID do usuário
+    socket.on('entrar_sala_privada', (uid) => { if(uid) socket.join(uid); });
 });
 
 // --- 4. ESTRATÉGIAS DE LOGIN ---
@@ -58,7 +54,7 @@ let GLOBAL_PAGE_TOKEN = process.env.PAGE_ACCESS_TOKEN;
 passport.serializeUser((u, d) => d(null, u));
 passport.deserializeUser((u, d) => d(null, u));
 
-// Facebook
+// Facebook Strategy
 if (process.env.FACEBOOK_APP_ID) {
     passport.use(new FacebookStrategy({
         clientID: process.env.FACEBOOK_APP_ID,
@@ -69,7 +65,7 @@ if (process.env.FACEBOOK_APP_ID) {
     }, (req, token, r, profile, done) => done(null, { profile, accessToken: token })));
 }
 
-// Google
+// Google Strategy
 if (process.env.GOOGLE_CLIENT_ID) {
     passport.use(new GoogleStrategy({
         clientID: process.env.GOOGLE_CLIENT_ID,
@@ -83,20 +79,21 @@ if (process.env.GOOGLE_CLIENT_ID) {
     ));
 }
 
-// --- 5. ROTAS FACEBOOK (COM VÍNCULO DE USUÁRIO) ---
+// =================================================================
+// --- 5. ROTAS FACEBOOK (LOGIN & WEBHOOK) ---
+// =================================================================
 
-// Iniciar Login (Captura o UID do usuário para vincular a página a ele)
+// Iniciar Login Facebook (Salva UID na sessão)
 app.get('/auth/facebook', (req, res, next) => {
     if (req.query.uid) req.session.uid = req.query.uid; 
     passport.authenticate('facebook', { scope: ['public_profile', 'pages_show_list', 'pages_messaging', 'instagram_basic', 'instagram_manage_messages'] })(req, res, next);
 });
 
-// Callback (Salva o Token e o Dono no Banco)
+// Callback Facebook
 app.get('/auth/facebook/callback', 
   passport.authenticate('facebook', { failureRedirect: '/login-falhou' }),
   async (req, res) => {
-    const userUid = req.session.uid; // Quem clicou no botão?
-
+    const userUid = req.session.uid; 
     try {
         const pagesUrl = `https://graph.facebook.com/me/accounts?access_token=${req.user.accessToken}`;
         const response = await fetch(pagesUrl);
@@ -104,32 +101,25 @@ app.get('/auth/facebook/callback',
 
         if (data.data && data.data.length > 0) {
             const pagina = data.data[0];
-            
-            // 1. Atualiza memória global (Fallback)
-            GLOBAL_PAGE_TOKEN = pagina.access_token;
+            GLOBAL_PAGE_TOKEN = pagina.access_token; // Atualiza memória
 
-            // 2. Salva no Firebase com o DONO (Isso resolve o vazamento)
+            // Salva vínculo (Página -> Usuário) no Banco
             const db = admin.firestore();
-            
-            // Salva na lista de páginas integradas (para o Webhook saber quem é o dono)
             await db.collection('integrated_pages').doc(pagina.id).set({
-                ownerUid: userUid || 'admin_fallback', // Se não tiver UID, assume admin
+                ownerUid: userUid || 'admin_fallback',
                 pageAccessToken: pagina.access_token,
                 pageName: pagina.name,
                 pageId: pagina.id,
                 updatedAt: new Date().toISOString()
             });
-
-            // Salva também no config global como backup
+            
+            // Backup Global
             await db.collection('config').doc('facebook_global').set({
                 token: pagina.access_token,
                 pageId: pagina.id
             });
-
-            console.log(`✅ Página ${pagina.name} vinculada ao usuário ${userUid}`);
         }
     } catch (error) { console.error("Erro Login FB:", error); }
-    
     res.send('<script>window.close()</script>');
   }
 );
@@ -138,19 +128,19 @@ app.get('/api/facebook/status', (req, res) => {
     res.json({ connected: !!GLOBAL_PAGE_TOKEN });
 });
 
-// --- 6. WEBHOOK FACEBOOK (ROTEAMENTO INTELIGENTE) ---
+// WEBHOOK VERIFICAÇÃO
 app.get('/webhook', (req, res) => {
     if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token'] === VERIFY_TOKEN) {
         res.status(200).send(req.query['hub.challenge']);
     } else { res.sendStatus(403); }
 });
 
-// Função para descobrir quem é o dono da página que recebeu a mensagem
+// Helpers
 async function getPageOwnerAndToken(pageId) {
     try {
         const doc = await admin.firestore().collection('integrated_pages').doc(pageId).get();
-        if (doc.exists) return doc.data(); // Retorna { ownerUid, pageAccessToken }
-    } catch(e) { console.error("Erro ao buscar dono da página:", e); }
+        if (doc.exists) return doc.data();
+    } catch(e) {}
     return null;
 }
 
@@ -164,16 +154,15 @@ async function getUserProfile(psid, token) {
     } catch (e) { return { first_name: "Cliente", profile_pic: "https://cdn-icons-png.flaticon.com/512/149/149071.png" }; }
 }
 
+// WEBHOOK RECEBIMENTO
 app.post('/webhook', async (req, res) => {
     const body = req.body;
     if (body.object === 'page' || body.object === 'instagram') {
         for (const entry of body.entry) {
             
-            // 🔥 AQUI ESTÁ A MÁGICA: Descobre o dono da página
+            // Descobre o dono da página para enviar só pra ele
             const pageId = entry.id;
             const pageConfig = await getPageOwnerAndToken(pageId);
-            
-            // Se não achou dono, tenta usar o global (Modo Resgate/Admin)
             const tokenParaUsar = pageConfig ? pageConfig.pageAccessToken : GLOBAL_PAGE_TOKEN;
             const uidParaEnviar = pageConfig ? pageConfig.ownerUid : null;
 
@@ -186,18 +175,20 @@ app.post('/webhook', async (req, res) => {
                     const perfil = await getUserProfile(evt.sender.id, tokenParaUsar);
                     
                     const msgData = {
-                        id: evt.sender.id, name: perfil.first_name, avatar: perfil.profile_pic,
-                        text: txt, type: type, timestamp: new Date().toISOString(), ehMinha: false
+                        id: evt.sender.id, 
+                        name: perfil.first_name, 
+                        avatar: perfil.profile_pic,
+                        text: txt, 
+                        type: type, 
+                        timestamp: new Date().toISOString(), 
+                        ehMinha: false,
+                        messageId: evt.message.mid // <--- ID para evitar duplicidade
                     };
 
                     if (uidParaEnviar) {
-                        // 🔒 Envia SÓ para o dono (Privacidade)
-                        io.to(uidParaEnviar).emit('nova_mensagem', msgData);
-                        console.log(`📨 Msg entregue para sala privada: ${uidParaEnviar}`);
+                        io.to(uidParaEnviar).emit('nova_mensagem', msgData); // Envia Privado
                     } else {
-                        // 📢 Fallback: Se não tem dono cadastrado, manda pra todos (Admin vê tudo)
-                        io.emit('nova_mensagem', msgData);
-                        console.log(`📨 Msg sem dono específico, enviada no global.`);
+                        io.emit('nova_mensagem', msgData); // Envia Global (Fallback)
                     }
                 }
             }
@@ -206,29 +197,24 @@ app.post('/webhook', async (req, res) => {
     } else { res.sendStatus(404); }
 });
 
-// --- 7. API ENVIAR (Busca token no banco) ---
+// API ENVIAR MENSAGEM
 app.post('/api/enviar-instagram', async (req, res) => {
     const { recipientId, texto } = req.body;
-    
-    // Tenta achar token no banco (Prioridade) ou usa global
     let token = GLOBAL_PAGE_TOKEN;
-    
-    // Tenta recuperar do banco se a memória falhar
+
+    // Tenta recuperar token do banco se a memória falhar
     if (!token) {
         try {
             const db = admin.firestore();
-            // Pega o primeiro token válido que achar (Simplificação para envio rápido)
             const snapshot = await db.collection('integrated_pages').limit(1).get();
             if (!snapshot.empty) token = snapshot.docs[0].data().pageAccessToken;
             
-            // Se ainda não achou, tenta o config global
             if (!token) {
                 const doc = await db.collection('config').doc('facebook_global').get();
                 if (doc.exists) token = doc.data().token;
             }
-            
-            if (token) GLOBAL_PAGE_TOKEN = token; // Recupera memória
-        } catch(e) { console.error(e); }
+            if (token) GLOBAL_PAGE_TOKEN = token;
+        } catch(e) {}
     }
 
     if (!token) return res.status(500).json({ error: "Servidor sem token." });
@@ -240,27 +226,82 @@ app.post('/api/enviar-instagram', async (req, res) => {
             body: JSON.stringify({ recipient: { id: recipientId }, message: { text: texto } }) 
         });
         const data = await response.json();
+        
         if (data.error) return res.status(500).json({ error: data.error.message });
+        
+        // Retorna o ID da mensagem para o front salvar igual e não duplicar
         res.json({ success: true, id: data.message_id });
+
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// --- 8. ROTAS GOOGLE (Mantidas) ---
+// =================================================================
+// --- 6. ROTAS GOOGLE CALENDAR (AGORA ESTÃO TODAS AQUI) ---
+// =================================================================
+
+// Login Google
 app.get('/auth/google', (req, res, next) => {
-    passport.authenticate('google', { scope: ['profile', 'email', 'https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/calendar.events'], accessType: 'offline', prompt: 'consent' })(req, res, next);
-});
-app.get('/auth/google/callback', passport.authenticate('google', { failureRedirect: '/login-falhou' }), (req, res) => { res.send(`<html><body><script>if(window.opener){window.opener.postMessage("login_google_sucesso","*");}window.close();</script></body></html>`); });
-const checkGoogleAuth = (req, res, next) => { if (req.user && req.user.accessToken) return next(); res.status(401).json({ error: 'Não conectado' }); };
-app.get('/api/google/status', (req, res) => { res.json({ connected: !!(req.user && req.user.accessToken) }); });
-app.get('/api/google/events', checkGoogleAuth, async (req, res) => {
-    try { const r = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${req.query.timeMin}&timeMax=${req.query.timeMax}&singleEvents=true&orderBy=startTime`, { headers: { Authorization: `Bearer ${req.user.accessToken}` } }); const d = await r.json(); res.json(d.items || []); } catch (e) { res.status(500).json(e); }
-});
-app.post('/api/google/create-event', checkGoogleAuth, async (req, res) => {
-    try { const r = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1&sendUpdates=all`, { method: 'POST', headers: { 'Authorization': `Bearer ${req.user.accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify(req.body) }); const d = await r.json(); res.json(d); } catch (e) { res.status(500).json(e); }
-});
-app.delete('/api/google/delete-event/:id', checkGoogleAuth, async (req, res) => {
-    try { await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${req.params.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${req.user.accessToken}` } }); res.json({ success: true }); } catch (e) { res.status(500).json(e); }
+    passport.authenticate('google', { 
+        scope: ['profile', 'email', 'https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/calendar.events'],
+        accessType: 'offline', 
+        prompt: 'consent'
+    })(req, res, next);
 });
 
-// --- START ---
-server.listen(PORT, () => console.log(`✅ Server Blindado na porta ${PORT}`));
+// Callback Google
+app.get('/auth/google/callback', 
+  passport.authenticate('google', { failureRedirect: '/login-falhou' }),
+  function(req, res) {
+    res.send(`<html><body><script>if(window.opener){window.opener.postMessage("login_google_sucesso","*");}window.close();</script></body></html>`);
+  }
+);
+
+// Middleware
+const checkGoogleAuth = (req, res, next) => {
+    if (req.user && req.user.accessToken) return next();
+    res.status(401).json({ error: 'Não conectado ao Google' });
+};
+
+// Status
+app.get('/api/google/status', (req, res) => {
+    res.json({ connected: !!(req.user && req.user.accessToken) });
+});
+
+// Listar Eventos
+app.get('/api/google/events', checkGoogleAuth, async (req, res) => {
+    const { timeMin, timeMax } = req.query;
+    try {
+        const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime`;
+        const response = await fetch(url, { headers: { Authorization: `Bearer ${req.user.accessToken}` } });
+        const data = await response.json();
+        if (data.error) return res.status(500).json(data.error);
+        res.json(data.items || []);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Criar Evento
+app.post('/api/google/create-event', checkGoogleAuth, async (req, res) => {
+    try {
+        const response = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1&sendUpdates=all`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${req.user.accessToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify(req.body)
+        });
+        const data = await response.json();
+        if (data.error) return res.status(500).json(data.error);
+        res.json(data);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Deletar Evento
+app.delete('/api/google/delete-event/:id', checkGoogleAuth, async (req, res) => {
+    try {
+        await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${req.params.id}`, {
+            method: 'DELETE', headers: { Authorization: `Bearer ${req.user.accessToken}` }
+        });
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// --- 7. START ---
+server.listen(PORT, () => console.log(`✅ Servidor Completo e Corrigido na porta ${PORT}`));
