@@ -303,8 +303,7 @@ app.delete('/api/google/delete-event/:id', checkGoogleAuth, async (req, res) => 
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// --- 1. Configuração do Firebase Admin (Se já tiver, pule esta parte) ---
-const admin = require('firebase-admin');
+
 // Você precisa baixar a chave privada do Firebase (arquivo .json)
 // Vá em: Configurações do Projeto > Contas de Serviço > Gerar nova chave privada
 const serviceAccount = require('./caminho-para-sua-chave-firebase.json'); 
