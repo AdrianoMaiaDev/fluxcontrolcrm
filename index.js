@@ -463,5 +463,46 @@ app.post('/api/create-subscription', async (req, res) => {
     }
 });
 
+// --- ROTA: CANCELAR ASSINATURA ---
+app.post('/api/cancel-subscription', async (req, res) => {
+    try {
+        const { uid, email } = req.body;
+
+        if (!uid || !email) return res.status(400).json({ error: 'Usuário não identificado.' });
+
+        // 1. Achar o cliente no Asaas pelo email
+        const { data: searchData } = await asaasApi.get(`/customers?email=${email}`);
+        if (!searchData.data || searchData.data.length === 0) {
+            return res.status(404).json({ error: 'Cliente não encontrado no sistema de pagamento.' });
+        }
+        const customerId = searchData.data[0].id;
+
+        // 2. Achar a assinatura ativa desse cliente
+        const { data: subsData } = await asaasApi.get(`/subscriptions?customer=${customerId}&status=ACTIVE`);
+        
+        if (subsData.data && subsData.data.length > 0) {
+            const subscriptionId = subsData.data[0].id;
+            
+            // 3. Cancelar no Asaas
+            await asaasApi.delete(`/subscriptions/${subscriptionId}`);
+            console.log(`Assinatura ${subscriptionId} cancelada para o usuário ${email}`);
+        }
+
+        // 4. Atualizar Firebase (Define status como 'canceled')
+        if (db) {
+            await db.collection('users').doc(uid).update({
+                subscriptionStatus: 'canceled',
+                planType: 'free'
+            });
+        }
+
+        res.json({ success: true, message: 'Assinatura cancelada com sucesso.' });
+
+    } catch (error) {
+        console.error('Erro ao cancelar:', error.response ? error.response.data : error.message);
+        res.status(500).json({ error: 'Erro ao processar cancelamento.' });
+    }
+});
+
 // --- 7. START ---
 server.listen(PORT, () => console.log(`✅ Servidor Completo e Corrigido na porta ${PORT}`));
