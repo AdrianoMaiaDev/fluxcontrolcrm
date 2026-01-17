@@ -306,7 +306,7 @@ app.delete('/api/google/delete-event/:id', checkGoogleAuth, async (req, res) => 
 
 // Você precisa baixar a chave privada do Firebase (arquivo .json)
 // Vá em: Configurações do Projeto > Contas de Serviço > Gerar nova chave privada
-const serviceAccount = require('./caminho-para-sua-chave-firebase.json'); 
+const serviceAccount = require('/etc/secrets/serviceAccountKey.json');
 
 if (!admin.apps.length) {
   admin.initializeApp({
