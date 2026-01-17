@@ -378,7 +378,7 @@ const axios = require('axios');
 // Para testes use: 'https://sandbox.asaas.com/api/v3'
 // Para produção use: 'https://www.asaas.com/api/v3'
 const ASAAS_URL = 'https://www.asaas.com/api/v3'; 
-const ASAAS_API_KEY = '$aact_...'; // <--- COLE SUA CHAVE API DO ASAAS AQUI (Começa com $aact)
+const ASAAS_API_KEY = process.env.ASAAS_API_KEY; // <--- COLE SUA CHAVE API DO ASAAS AQUI (Começa com $aact)
 
 // Configuração padrão do Axios para não repetir cabeçalhos
 const asaasApi = axios.create({
