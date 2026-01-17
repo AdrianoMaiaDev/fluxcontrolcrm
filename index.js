@@ -419,7 +419,7 @@ app.post('/api/create-subscription', async (req, res) => {
         // 2. Se não existir, cria o cliente no Asaas
         if (!customerId) {
             const { data: newCustomer } = await asaasApi.post('/customers', {
-                name: name || 'Usuário FluxPro',
+                name: name || 'Usuário Flux Control CRM',
                 email: email,
                 cpfCnpj: cpfCnpj, // Asaas exige CPF/CNPJ para emitir boleto/pix
                 externalReference: uid // Vincula o Cliente ao UID também
@@ -435,7 +435,7 @@ app.post('/api/create-subscription', async (req, res) => {
             value: value,
             nextDueDate: new Date().toISOString().split('T')[0], // Cobra hoje
             cycle: cycle, // MONTHLY ou YEARLY
-            description: `Assinatura FluxPro CRM (${isAnual ? 'Anual' : 'Mensal'})`,
+            description: `Assinatura Flux Control CRM (${isAnual ? 'Anual' : 'Mensal'})`,
             externalReference: uid // <--- O SEGREDO: Aqui vai o ID do Firebase para o Webhook ler depois
         });
 
