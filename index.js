@@ -303,5 +303,166 @@ app.delete('/api/google/delete-event/:id', checkGoogleAuth, async (req, res) => 
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// --- 1. Configuração do Firebase Admin (Se já tiver, pule esta parte) ---
+const admin = require('firebase-admin');
+// Você precisa baixar a chave privada do Firebase (arquivo .json)
+// Vá em: Configurações do Projeto > Contas de Serviço > Gerar nova chave privada
+const serviceAccount = require('./caminho-para-sua-chave-firebase.json'); 
+
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+  });
+}
+const db = admin.firestore();
+
+// --- 2. A Rota do Webhook (Onde o Asaas vai bater) ---
+app.post('/webhook/asaas', async (req, res) => {
+    try {
+        // Log para você ver o que está chegando (útil para debug)
+        console.log('🔔 Webhook Asaas Recebido:', JSON.stringify(req.body, null, 2));
+
+        const { event, payment } = req.body;
+
+        // O Asaas manda vários eventos (criado, vencido, etc).
+        // Só nos interessa quando o dinheiro cai na conta.
+        if (event === 'PAYMENT_CONFIRMED' || event === 'PAYMENT_RECEIVED') {
+            
+            // O "externalReference" é onde guardamos o UID do usuário quando criamos a cobrança
+            const firebaseUid = payment.externalReference;
+
+            if (!firebaseUid) {
+                console.warn('⚠️ Pagamento recebido sem UID (externalReference). Ignorando automação.');
+                // Retornamos 200 pro Asaas parar de tentar, mesmo que não tenha servido pra nós
+                return res.status(200).json({ received: true });
+            }
+
+            console.log(`✅ Pagamento Aprovado! Liberando acesso para UID: ${firebaseUid}`);
+
+            // ATUALIZAÇÃO NO FIREBASE (A Mágica Acontece Aqui)
+            await db.collection('users').doc(firebaseUid).update({
+                subscriptionStatus: 'active', // Isso libera o React imediatamente
+                trialEndsAt: null,            // Remove a trava de data
+                planType: payment.value > 100 ? 'anual' : 'mensal', // Detecta plano pelo valor
+                lastPaymentId: payment.id,
+                lastPaymentDate: new Date().toISOString(),
+                status: 'paid'
+            });
+
+            console.log(`🔓 Usuário ${firebaseUid} desbloqueado com sucesso.`);
+        } 
+        
+        else if (event === 'PAYMENT_OVERDUE') {
+            // Opcional: Se o pagamento atrasar ou vencer, você pode bloquear de novo
+            const firebaseUid = payment.externalReference;
+            if (firebaseUid) {
+                await db.collection('users').doc(firebaseUid).update({
+                    subscriptionStatus: 'expired' // Isso vai travar o React de novo
+                });
+                console.log(`🔒 Usuário ${firebaseUid} bloqueado por falta de pagamento.`);
+            }
+        }
+
+        // Sempre responda 200 OK para o Asaas saber que você recebeu
+        res.status(200).json({ received: true });
+
+    } catch (error) {
+        console.error('❌ Erro crítico no Webhook:', error);
+        // Se der erro no SEU servidor, mande 500 para o Asaas tentar de novo mais tarde
+        res.status(500).send('Erro interno no servidor');
+    }
+});
+
+const axios = require('axios');
+
+// --- CONFIGURAÇÃO ASAAS ---
+// Para testes use: 'https://sandbox.asaas.com/api/v3'
+// Para produção use: 'https://www.asaas.com/api/v3'
+const ASAAS_URL = 'https://www.asaas.com/api/v3'; 
+const ASAAS_API_KEY = '$aact_...'; // <--- COLE SUA CHAVE API DO ASAAS AQUI (Começa com $aact)
+
+// Configuração padrão do Axios para não repetir cabeçalhos
+const asaasApi = axios.create({
+    baseURL: ASAAS_URL,
+    headers: {
+        'access_token': ASAAS_API_KEY,
+        'Content-Type': 'application/json'
+    }
+});
+
+// --- ROTA: CRIAR ASSINATURA ---
+app.post('/api/create-subscription', async (req, res) => {
+    try {
+        const { uid, email, name, cpfCnpj, planType } = req.body;
+
+        if (!uid || !email || !cpfCnpj || !planType) {
+            return res.status(400).json({ error: 'Dados incompletos (uid, email, cpf, planType).' });
+        }
+
+        // Definir valores conforme seu plano
+        // Mensal: R$ 32,00 | Anual: R$ 345,60
+        const isAnual = planType === 'anual';
+        const value = isAnual ? 345.60 : 32.00;
+        const cycle = isAnual ? 'YEARLY' : 'MONTHLY';
+
+        // 1. Verificar se o cliente já existe no Asaas (para não duplicar)
+        let customerId;
+        try {
+            const { data: searchData } = await asaasApi.get(`/customers?email=${email}`);
+            if (searchData.data && searchData.data.length > 0) {
+                customerId = searchData.data[0].id;
+                console.log(`Cliente Asaas encontrado: ${customerId}`);
+            }
+        } catch (e) {
+            console.log('Cliente não encontrado, criando novo...');
+        }
+
+        // 2. Se não existir, cria o cliente no Asaas
+        if (!customerId) {
+            const { data: newCustomer } = await asaasApi.post('/customers', {
+                name: name || 'Usuário FluxPro',
+                email: email,
+                cpfCnpj: cpfCnpj, // Asaas exige CPF/CNPJ para emitir boleto/pix
+                externalReference: uid // Vincula o Cliente ao UID também
+            });
+            customerId = newCustomer.id;
+            console.log(`Novo cliente criado: ${customerId}`);
+        }
+
+        // 3. Criar a Assinatura
+        const { data: subscription } = await asaasApi.post('/subscriptions', {
+            customer: customerId,
+            billingType: 'UNDEFINED', // Deixa o usuário escolher (PIX, Boleto ou Cartão) na tela de pagamento
+            value: value,
+            nextDueDate: new Date().toISOString().split('T')[0], // Cobra hoje
+            cycle: cycle, // MONTHLY ou YEARLY
+            description: `Assinatura FluxPro CRM (${isAnual ? 'Anual' : 'Mensal'})`,
+            externalReference: uid // <--- O SEGREDO: Aqui vai o ID do Firebase para o Webhook ler depois
+        });
+
+        console.log(`Assinatura criada: ${subscription.id} para UID: ${uid}`);
+
+        // Retorna o link de pagamento para o Frontend
+        // O Asaas geralmente retorna 'invoiceUrl' na criação da assinatura ou da primeira cobrança gerada
+        // Para simplificar, vamos pegar a URL da fatura gerada automaticamente
+        
+        // Pequeno delay para garantir que a cobrança foi gerada
+        // (Às vezes a assinatura cria a cobrança milissegundos depois)
+        
+        // Opção robusta: Buscar a cobrança pendente dessa assinatura
+        const { data: payments } = await asaasApi.get(`/payments?subscription=${subscription.id}`);
+        const paymentLink = payments.data[0].invoiceUrl;
+
+        res.json({ 
+            success: true, 
+            paymentUrl: paymentLink 
+        });
+
+    } catch (error) {
+        console.error('Erro ao criar assinatura:', error.response ? error.response.data : error.message);
+        res.status(500).json({ error: 'Erro ao gerar pagamento no Asaas.' });
+    }
+});
+
 // --- 7. START ---
 server.listen(PORT, () => console.log(`✅ Servidor Completo e Corrigido na porta ${PORT}`));
