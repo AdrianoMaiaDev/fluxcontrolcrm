@@ -401,7 +401,7 @@ app.post('/api/create-subscription', async (req, res) => {
         // Definir valores conforme seu plano
         // Mensal: R$ 32,00 | Anual: R$ 345,60
         const isAnual = planType === 'anual';
-        const value = isAnual ? 345.60 : 2.00;
+        const value = isAnual ? 345.60 : 5.00;
         const cycle = isAnual ? 'YEARLY' : 'MONTHLY';
 
         // 1. Verificar se o cliente já existe no Asaas (para não duplicar)
