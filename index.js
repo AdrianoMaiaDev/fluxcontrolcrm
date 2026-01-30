@@ -452,5 +452,31 @@ app.post('/api/cancel-subscription', async (req, res) => {
     }
 });
 
+// =================================================================
+// --- 9. ROTA DE RETORNO DA IA (N8N) ---
+// =================================================================
+
+app.post('/api/n8n-resposta', (req, res) => {
+    // Recebe os dados enviados pelo HTTP Request do n8n
+    const { uid, leadName, texto } = req.body;
+
+    // 1. Validação Básica
+    if (!uid || !leadName || !texto) {
+        console.error("❌ Erro: n8n enviou dados incompletos.");
+        return res.status(400).json({ error: "Faltou uid, leadName ou texto." });
+    }
+
+    console.log(`🤖 IA (n8n) respondeu para: ${leadName}. Enviando ordem ao Front...`);
+
+    // 2. O PULO DO GATO: Envia a ordem via Socket direto para a sua extensão
+    // O 'io.to(uid)' garante que só a SUA extensão receba o comando
+    io.to(uid).emit('comando_ia_escrever', { 
+        leadName, 
+        texto 
+    });
+
+    res.json({ success: true });
+});
+
 // --- 8. START ---
 server.listen(PORT, () => console.log(`✅ Servidor ON na porta ${PORT}`));
