@@ -61,7 +61,7 @@ if (process.env.FIREBASE_CREDENTIALS) {
 }
 
 // --- 3. SOCKET.IO ---
-const io = new Server(server, { cors: { origin: "*" } });
+const io = new Server(server, { cors: { origin: "*", methods: ["GET", "POST"]} });
 io.on('connection', (socket) => {
     socket.on('entrar_sala_privada', (uid) => { if(uid) socket.join(uid); });
 });
